@@ -1,3 +1,21 @@
+# `CaMeL` playground fork
+
+Use the custom `run_camel.py` to try out with CaMeL without AgentDojo.
+`examples/` contains examples of custom tools and policies.
+
+Run with (after populating `.env` with values for `GOOGLE_API_KEY` and `GCP_PROJECT`:
+
+```
+uv run --env-file .env run_camel.py \
+--tools examples/custom_camel_tools.py \
+--model google:<model> \
+"your query here"
+```
+
+Below is the original README.
+
+---
+
 # `CaMeL`: [Defeating Prompt Injections by Design](https://arxiv.org/abs/2503.18813)
 
 Edoardo Debenedetti<sup>1,3</sup>, Ilia Shumailov<sup>2</sup>, Tianqi Fan<sup>1</sup>, Jamie Hayes<sup>2</sup>, Nicholas Carlini<sup>2</sup>, Daniel Fabian<sup>1</sup>, Christoph Kern<sup>1</sup>, Chongyang Shi<sup>2</sup>, Florian Tramèr<sup>3</sup>
