@@ -194,6 +194,10 @@ def _highlight_exception_code(
 def _get_quarantined_llm(model: KnownModelName) -> KnownModelName:
     if "openai" in model and "o1" in model:
         return "openai:gpt-4o"
+    # AgentDojo uses a bare `google:` prefix; pydantic-ai needs `google-gla:`
+    # (Generative Language API) or `google-vertex:`. Default to GLA.
+    if model.startswith("google:"):
+        return "google-gla:" + model.split(":", 1)[1]  # type: ignore[return-value]
     return model
 
 
@@ -219,7 +223,7 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
         ] = system_prompt_generator.default_system_prompt_generator,
         eval_mode: interpreter.MetadataEvalMode = interpreter.MetadataEvalMode.NORMAL,
         quarantined_llm_retries: int = 10,
-        max_attempts: int = 10,
+        max_attempts: int = 3,
     ) -> None:
         """Initializes the PrivilegedLLM."""
         self.llm = llm

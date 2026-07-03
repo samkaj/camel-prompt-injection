@@ -35,6 +35,10 @@ _oai_thinking_models_with_effort = {
     f"{model}-{effort}": name for model, name in _oai_thinking_models.items() for effort in _thinking_efforts
 }
 _supported_model_names = {
+    "gemini-3.1-pro-preview": "AI model developed by Google",
+    "gemini-3.5-flash": "AI model developed by Google",
+    "gemini-2.5-flash": "AI model developed by Google",
+    "gemini-2.5-flash-lite": "AI model developed by Google",
     "gemini-2.5-flash-preview-05-20": "AI model developed by Google",
     "gemini-2.5-pro-preview-06-05": "AI model developed by Google",
     "gemini-2.0-flash-lite-001": "AI model developed by Google",
