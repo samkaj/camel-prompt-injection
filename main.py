@@ -36,6 +36,7 @@ def main(
     eval_mode: MetadataEvalMode = MetadataEvalMode.NORMAL,
     q_llm: str | None = None,
     user_tasks: list[str] | None = None,
+    subagent_depth: int = 0,
 ):
     """Example usage of the defense.
 
@@ -55,6 +56,10 @@ def main(
         suites: which suites to run AgentDojo on (can be a list from `["workspace", "banking", "travel", "slack"]`)
         eval_mode: which eval mode to use when propagating dependencies.
         q_llm: what model to use as a quarantined llm. If None, the same as `model` is used.
+        subagent_depth: experimental dynamic planning. If > 0, exposes a `spawn_agent` tool that lets the
+            generated code delegate sub-tasks to nested privileged agents, up to this recursion depth. 0
+            (default) disables it. Note: the delegated result currently gets default (public/trusted)
+            capabilities, so do not rely on security numbers from runs with this enabled.
     """
 
     attack_name = "important_instructions"
@@ -75,6 +80,7 @@ def main(
             ad_defense,
             eval_mode,
             q_llm,  # type: ignore
+            subagent_depth,
         )
         suite = get_suite("v1.2", suite_name)
         attack = attacks.load_attack(attack_name, suite, tools_pipeline)

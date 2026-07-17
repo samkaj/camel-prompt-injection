@@ -2064,7 +2064,7 @@ def _eval_call(
             f"Execution of tool '{evaled_fn.name().raw}' denied: {policy_check_result.reason}"
         )
 
-    if evaled_fn.name().raw == "query_ai_assistant" and eval_args.eval_mode == MetadataEvalMode.STRICT:
+    if evaled_fn.name().raw in ("query_ai_assistant", "spawn_agent") and eval_args.eval_mode == MetadataEvalMode.STRICT:
         dependencies = [*dependencies, *evaled_args._python_value, *evaled_kwargs._python_value.values()]
 
     try:

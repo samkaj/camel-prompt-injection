@@ -201,6 +201,42 @@ def _get_quarantined_llm(model: KnownModelName) -> KnownModelName:
     return model
 
 
+_SPAWN_AGENT_DOC = """\
+Delegates a self-contained sub-task to a fresh sub-agent and returns its result parsed into `output_schema`.
+
+Unlike `query_ai_assistant` (which only parses unstructured data and has **no** tool access), the sub-agent is a full \
+assistant that can call the same tools you can and writes and runs its own code to accomplish the delegated task. Use \
+this to plan dynamically: delegate a self-contained sub-task whose exact steps depend on data you only obtain at \
+runtime, then use the structured result it returns.
+
+Guidelines:
+- The `task` must be a complete, self-contained natural-language description of the sub-task, including **all** the \
+concrete data the sub-agent needs. The sub-agent does **not** share your variables, so insert every relevant value \
+directly into the `task` string.
+- Do **not** use this to merely parse or reformat data; use `query_ai_assistant` for that.
+- The sub-agent may itself perform side effects (e.g., sending a message) if the task asks for them, so only delegate \
+actions you actually want performed.
+
+:param task: a complete, self-contained natural-language description of the sub-task to delegate, including all
+    necessary data.
+:param output_schema: a Pydantic BaseModel class (or a builtin type) specifying the structure of the result to
+    return, following the same rules as `query_ai_assistant`.
+"""
+
+
+def _spawn_agent_coercion_query(task: str, output: str) -> str:
+    return f"""\
+A sub-agent was delegated the following task:
+
+{task}
+
+The sub-agent produced the following result:
+
+{output}
+
+Extract the final answer to the delegated task into the requested structured format."""
+
+
 class PrivilegedLLM(agent_pipeline.BasePipelineElement):
     """A pipeline element that generates and interprets code expressing the user query.
 
@@ -211,6 +247,9 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
         security_policies: a list of security policy tuples, where the first element is the tool name and the second one is the security policy to apply.
         eval_mode: the evaluation mode for the interpreter.
         quarantined_llm_retries: the number of retries for the quarantined LLM.
+        max_depth: experimental. If > 0, exposes a `spawn_agent` tool to the generated code
+          that delegates sub-tasks to nested privileged agents, up to this recursion depth.
+          0 (default) disables it and preserves the original behavior.
     """
 
     def __init__(
@@ -224,6 +263,7 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
         eval_mode: interpreter.MetadataEvalMode = interpreter.MetadataEvalMode.NORMAL,
         quarantined_llm_retries: int = 10,
         max_attempts: int = 3,
+        max_depth: int = 0,
     ) -> None:
         """Initializes the PrivilegedLLM."""
         self.llm = llm
@@ -233,6 +273,10 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
         self.quarantined_llm_retries = quarantined_llm_retries
         self.dummy_runtime = functions_runtime.FunctionsRuntime()
         self.max_attempts = max_attempts
+        # Experimental dynamic planning: when > 0, expose a `spawn_agent` tool that lets
+        # the generated code delegate a sub-task to a nested privileged agent (up to this
+        # recursion depth). 0 disables it, preserving the original CaMeL behavior.
+        self.max_depth = max_depth
         # Gemini thinking and o1-* do not support JSON mode, so we fall back to base base Gemini/4o
         self.quarantined_llm_model: KnownModelName = _get_quarantined_llm(quarantined_llm_model)
 
@@ -403,22 +447,17 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
             dependencies,
         )
 
-    def query(
+    def _register_tools(
         self,
-        query: str,
         runtime: functions_runtime.FunctionsRuntime,
-        env: _E = functions_runtime.EmptyEnv(),
-        messages: Sequence[ad_types.ChatMessage] = [],
-        extra_args: dict = {},
-    ) -> tuple[
-        str,
-        functions_runtime.FunctionsRuntime,
-        _E,
-        Sequence[ad_types.ChatMessage],
-        dict,
-    ]:
-        """Generates and interprets code which expresses the user query."""
-        privileged_llm_messages = []
+        env: functions_runtime.TaskEnvironment,
+    ) -> None:
+        """Registers the helper tools (`query_ai_assistant`, and optionally `spawn_agent`) on `runtime`.
+
+        Called once per top-level `query`. Nested delegated runs reuse the same registrations, so the
+        `spawn_agent` recursion is bounded by the shared depth counter captured here rather than by
+        re-registration.
+        """
 
         def query_ai_assistant(query: str, output_schema: type[_T]) -> _T:
             return quarantined_llm.query_quarantined_llm(
@@ -431,6 +470,41 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
         query_ai_assistant.__doc__ = quarantined_llm.query_quarantined_llm.__doc__
         runtime.register_function(query_ai_assistant)
 
+        if self.max_depth <= 0:
+            return
+
+        # Shared, mutable depth counter closed over by `spawn_agent`. A single registration is
+        # reused by nested runs so that dispatch-by-name in the interpreter is not clobbered.
+        depth_state = {"current": 0}
+
+        def spawn_agent(task: str, output_schema: type[_T]) -> _T:
+            if depth_state["current"] >= self.max_depth:
+                raise RuntimeError(
+                    f"Maximum sub-agent delegation depth ({self.max_depth}) reached; cannot delegate further."
+                )
+            depth_state["current"] += 1
+            try:
+                model_output, _, _ = self._run_loop(task, runtime, env, [])
+            finally:
+                depth_state["current"] -= 1
+            # The sub-agent's answer is free text; coerce it into the requested schema with the
+            # quarantined LLM, mirroring how `query_ai_assistant` returns typed values.
+            return quarantined_llm.query_quarantined_llm(
+                llm=self.quarantined_llm_model,
+                query=_spawn_agent_coercion_query(task, model_output),
+                output_schema=output_schema,
+                retries=self.quarantined_llm_retries,
+            )
+
+        spawn_agent.__doc__ = _SPAWN_AGENT_DOC
+        runtime.register_function(spawn_agent)
+
+    def _build_namespace_and_prompt(
+        self,
+        runtime: functions_runtime.FunctionsRuntime,
+        env: functions_runtime.TaskEnvironment,
+    ) -> tuple[str, ns.Namespace]:
+        """Builds the system prompt and the initial namespace from the currently-registered tools."""
         builtins_namespace = ns.Namespace.with_builtins()
         # Models get confused in the other suites and should not use datetime stuff
         classes_to_exclude = (
@@ -456,7 +530,22 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
             builtins_namespace = dataclasses.replace(builtins_namespace, variables=new_variables)
 
         namespace = builtins_namespace.add_variables(make_agentdojo_namespace(builtins_namespace, runtime, env))
+        return system_prompt, namespace
 
+    def _run_loop(
+        self,
+        query: str,
+        runtime: functions_runtime.FunctionsRuntime,
+        env: functions_runtime.TaskEnvironment,
+        messages: Sequence[ad_types.ChatMessage],
+    ) -> tuple[str, list[ad_types.ChatMessage], ns.Namespace]:
+        """Runs the generate-code -> interpret -> feed-back-error loop and returns the outcome.
+
+        Shared by the top-level `query` and by nested `spawn_agent` delegations.
+        """
+        system_prompt, namespace = self._build_namespace_and_prompt(runtime, env)
+
+        privileged_llm_messages: list[ad_types.ChatMessage] = []
         model_output = ""
         dependencies = ()
 
@@ -477,6 +566,27 @@ class PrivilegedLLM(agent_pipeline.BasePipelineElement):
 
             if not interpretation_error:
                 break  # Exit loop if no error
+
+        return model_output, list(messages), namespace
+
+    def query(
+        self,
+        query: str,
+        runtime: functions_runtime.FunctionsRuntime,
+        env: _E = functions_runtime.EmptyEnv(),
+        messages: Sequence[ad_types.ChatMessage] = [],
+        extra_args: dict = {},
+    ) -> tuple[
+        str,
+        functions_runtime.FunctionsRuntime,
+        _E,
+        Sequence[ad_types.ChatMessage],
+        dict,
+    ]:
+        """Generates and interprets code which expresses the user query."""
+        self._register_tools(runtime, env)
+
+        _, messages, namespace = self._run_loop(query, runtime, env, messages)
 
         extra_args["camel_namespace"] = namespace
         if messages[-1]["role"] == "user" and "\n\nTraceback" in ad_types.get_text_content_as_str(

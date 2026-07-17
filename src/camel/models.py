@@ -100,7 +100,14 @@ def make_tools_pipeline(
     ad_defense: str | None,
     eval_mode: MetadataEvalMode,
     q_llm: KnownModelName | None,
+    subagent_depth: int = 0,
 ) -> agent_pipeline.AgentPipeline:
+    # The privileged LLM uses the `genai` client (GOOGLE_API_KEY), but the quarantined LLM goes
+    # through pydantic-ai's `google-gla` provider, which reads GEMINI_API_KEY. This fork only sets
+    # GOOGLE_API_KEY, so mirror it here to keep the quarantined LLM working for gemini models.
+    if os.getenv("GOOGLE_API_KEY") and not os.getenv("GEMINI_API_KEY"):
+        os.environ["GEMINI_API_KEY"] = os.environ["GOOGLE_API_KEY"]
+
     if "google" in model:
         # vertexai.init(project=os.getenv("GCP_PROJECT"), location=os.getenv("GCP_LOCATION"))
         # llm = GoogleLLM(model.split(":")[1])
@@ -202,6 +209,7 @@ def make_tools_pipeline(
                     llm,
                     ADNoSecurityPolicyEngine,
                     q_llm or model,
+                    max_depth=subagent_depth,
                 ),
             ]
         )
@@ -212,6 +220,9 @@ def make_tools_pipeline(
             tools_pipeline.name = f"{model.split(':')[1]}-{thinking_budget_tokens}+camel"
         else:
             tools_pipeline.name = f"{model.split(':')[1]}+camel"
+
+        if subagent_depth > 0:
+            tools_pipeline.name += f"+subagent{subagent_depth}"
 
         if q_llm:
             tools_pipeline.name += f"-q:{q_llm.split(':')[1]}"
