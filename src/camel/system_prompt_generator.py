@@ -341,11 +341,27 @@ While generating the code, follow these rules:
 """
 
 
+_SPAWN_AGENT_NOTE = """\
+## Delegating sub-tasks with `spawn_agent`
+
+You also have access to the `spawn_agent` tool. It delegates a **self-contained** sub-task to a fresh sub-agent that \
+can use all the same tools you can and writes and runs its own code to accomplish it.
+
+- **Prefer `spawn_agent` to plan dynamically**: when a request decomposes into a self-contained sub-task whose exact \
+steps depend on data you only obtain at runtime (e.g. "find the relevant message, follow whatever link it contains, \
+and report X"), delegate that sub-task instead of hard-coding every branch yourself.
+- Pass the sub-task as a single, complete natural-language instruction that includes **all** the data the sub-agent \
+needs (it does not share your variables), and then use the structured result it returns.
+- Use `spawn_agent` for **doing** multi-step sub-tasks; use `query_ai_assistant` only for **parsing** unstructured data.
+"""
+
+
 def default_system_prompt_generator(
     functions: Iterable[functions_runtime.Function],
     classes_to_exclude: set[str] = set(),
 ) -> str:
     """Generates a system prompt with the provided functions."""
+    functions = list(functions)
     function_definitions = (function_to_python_definition(f) for f in functions)
 
     pydantic_types_definitions = get_pydantic_types_definitions(functions).values()
@@ -368,6 +384,10 @@ It is absolutely important that you do not assume that the type used for the fie
         if pydantic_types_definitions
         else ""
     )
+
+    # Only nudge the model toward delegation when the tool is actually registered (max_depth > 0);
+    # baseline runs without `spawn_agent` must not see this note.
+    spawn_agent_note = f"\n{_SPAWN_AGENT_NOTE}" if any(f.name == "spawn_agent" for f in functions) else ""
 
     prompt = f"""\
 You are a helpful assistant that rewrites user requests to structured Python code. You must specify the code within a fenced code block.
@@ -422,6 +442,7 @@ Additionally, you have access to the following functions that allow you to use e
 ```
 {types_note}
 {NOTES}
+{spawn_agent_note}
 """
 
     return prompt
