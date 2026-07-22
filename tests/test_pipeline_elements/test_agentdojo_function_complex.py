@@ -22,7 +22,6 @@ from camel.interpreter import interpreter, result
 from camel.interpreter import namespace as ns
 from camel.pipeline_elements import agentdojo_function
 
-
 def test_send_email():
     suite = task_suite.get_suite("v1.1.1", "workspace")
     env = suite.load_and_inject_default_environment({})

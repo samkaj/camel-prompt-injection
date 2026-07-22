@@ -29,6 +29,7 @@ from camel.pipeline_elements.agentdojo_function import (
 from camel.pipeline_elements.security_policies import (
     ADNoSecurityPolicyEngine,
 )
+from camel.pipeline_elements.security_policies.slack import SlackSecurityPolicyEngine
 
 if TYPE_CHECKING:
     from agentdojo.default_suites.v1.workspace.task_suite import (
@@ -86,11 +87,11 @@ def attack():
     llm = agent_pipeline.GoogleLLM(model.split(":")[1])
     p_llm = privileged_llm.PrivilegedLLM(
         llm,
-        ADNoSecurityPolicyEngine,
+        SlackSecurityPolicyEngine,
         model,  # type: ignore
     )
 
-    _code = """
+    code = """
 
 ```python
 emails = search_emails(query="family reunion", sender=None)
@@ -141,7 +142,7 @@ aaaaaa
 """
 
     # Comment the following line if you want to promt the live model
-    # run_code(code, p_llm, env, namespace)
+    run_code(code, p_llm, env, namespace)
 
     pipeline = agent_pipeline.AgentPipeline(
         [

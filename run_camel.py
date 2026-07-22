@@ -83,6 +83,7 @@ def _build_engine_class(module) -> type[SecurityPolicyEngine]:
     no_side_effect_tools = set(getattr(module, "NO_SIDE_EFFECT_TOOLS", set()))
 
     if not policies:
+
         class _AllowAllEngine(SecurityPolicyEngine):
             def __init__(self, env=None) -> None:
                 self.policies = []
@@ -123,12 +124,29 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help="Metadata propagation mode.",
     )
     parser.add_argument("--max-attempts", type=int, default=3, help="Retries after an interpreter error.")
+    parser.add_argument(
+        "--subagent-depth",
+        type=int,
+        default=0,
+        help=(
+            "Experimental dynamic planning. If > 0, exposes a `spawn_agent` tool that lets the "
+            "generated code delegate sub-tasks to nested privileged agents, up to this recursion "
+            "depth. 0 (default) disables it."
+        ),
+    )
     parser.add_argument("query", nargs="+", help="The user query.")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
+
+    # The privileged LLM uses the `genai` client (GOOGLE_API_KEY), but the quarantined LLM --
+    # used by query_ai_assistant and by spawn_agent's result coercion -- goes through pydantic-ai's
+    # `google-gla` provider, which reads GEMINI_API_KEY. Mirror it so gemini coercion works.
+    # (models.py:108 does the same; this path bypasses models.py.)
+    if os.getenv("GOOGLE_API_KEY") and not os.getenv("GEMINI_API_KEY"):
+        os.environ["GEMINI_API_KEY"] = os.environ["GOOGLE_API_KEY"]
 
     module = _load_user_module(args.tools.resolve())
 
@@ -145,6 +163,7 @@ def main(argv: list[str] | None = None) -> int:
         args.q_llm or args.model,  # type: ignore[arg-type]
         eval_mode=MetadataEvalMode(args.eval_mode),
         max_attempts=args.max_attempts,
+        max_depth=args.subagent_depth,
     )
 
     _, _, _, messages, _ = p_llm.query(" ".join(args.query), runtime)
